@@ -87,6 +87,12 @@ function withIsolatedHome(fn) {
   }
 }
 
+// Runner for an npm-resolved project: npx under Node, Bun's bunx under Bun.
+function expectedNpmRunner() {
+  if (process.versions.bun) return 'bunx';
+  return process.platform === 'win32' ? 'npx.cmd' : 'npx';
+}
+
 function runTests() {
   console.log('\n=== Testing resolve-formatter.js ===\n');
 
@@ -214,8 +220,7 @@ function runTests() {
     const root = makeTmpDir();
     withIsolatedHome(() => {
       const result = resolveFormatterBin(root, 'biome');
-      const expectedBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-      assert.strictEqual(result.bin, expectedBin);
+      assert.strictEqual(result.bin, expectedNpmRunner());
       assert.deepStrictEqual(result.prefix, ['@biomejs/biome']);
     });
   });
@@ -236,10 +241,27 @@ function runTests() {
     const root = makeTmpDir();
     withIsolatedHome(() => {
       const result = resolveFormatterBin(root, 'prettier');
-      const expectedBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-      assert.strictEqual(result.bin, expectedBin);
+      assert.strictEqual(result.bin, expectedNpmRunner());
       assert.deepStrictEqual(result.prefix, ['prettier']);
     });
+  });
+
+  run('resolveFormatterBin: npm lockfile never routes through npx under Bun', () => {
+    const root = makeTmpDir();
+    fs.writeFileSync(path.join(root, 'package-lock.json'), '{}');
+    fs.writeFileSync(path.join(root, 'package.json'), '{}');
+    const previous = process.env.CLAUDE_PACKAGE_MANAGER;
+    delete process.env.CLAUDE_PACKAGE_MANAGER;
+    try {
+      withIsolatedHome(() => {
+        const result = resolveFormatterBin(root, 'prettier');
+        assert.strictEqual(result.bin, expectedNpmRunner());
+        assert.deepStrictEqual(result.prefix, ['prettier']);
+        if (process.versions.bun) assert.ok(!/npx/.test(result.bin), `npx used under Bun: ${result.bin}`);
+      });
+    } finally {
+      if (previous !== undefined) process.env.CLAUDE_PACKAGE_MANAGER = previous;
+    }
   });
 
   run('resolveFormatterBin: bun project falls back to a real bunx executable (never bunx.cmd)', () => {

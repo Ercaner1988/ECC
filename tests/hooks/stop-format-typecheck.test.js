@@ -324,7 +324,8 @@ if (test('resolveTscInvocation uses the package manager runner, not a hardcoded 
       assert.deepStrictEqual(bun.args, ['tsc', '--noEmit', '--pretty', 'false']);
 
       const npm = resolveTscInvocation(npmProject);
-      assert.strictEqual(npm.bin, isWin ? 'npx.cmd' : 'npx');
+      // Under Bun an npm lockfile still runs through bunx, never npx (npm).
+      assert.strictEqual(npm.bin, process.versions.bun ? 'bunx' : isWin ? 'npx.cmd' : 'npx');
       assert.deepStrictEqual(npm.args, ['tsc', '--noEmit', '--pretty', 'false']);
     } finally {
       fs.rmSync(bunProject, { recursive: true, force: true });

@@ -169,7 +169,13 @@ function getRunnerFromPackageManager(projectRoot) {
   const { getPackageManager } = require('./package-manager');
   const pm = getPackageManager({ projectDir: projectRoot });
   const execCmd = pm?.config?.execCmd || defaultExecCmd();
-  const [rawBin = defaultExecCmd(), ...prefix] = execCmd.split(/\s+/).filter(Boolean);
+  let [rawBin = defaultExecCmd(), ...prefix] = execCmd.split(/\s+/).filter(Boolean);
+  // Under Bun, an npm lockfile must not route the hook through npx (npm): Bun's
+  // own runner executes the same package binaries.
+  if (rawBin === 'npx' && process.versions && process.versions.bun) {
+    rawBin = 'bunx';
+    prefix = [];
+  }
   const bin = isWin ? WIN_CMD_SHIMS[rawBin] || rawBin : rawBin;
   return { bin, prefix };
 }
