@@ -124,8 +124,70 @@ function compileRegex(pattern) {
   }
 }
 
+function regexTimeoutError() {
+  const timeoutError = new Error('regex evaluation exceeded ' + REGEX_TIMEOUT_MS + 'ms');
+  timeoutError.code = 'HOOKIFY_REGEX_TIMEOUT';
+  return timeoutError;
+}
+
+// Bun's `vm` accepts the `timeout` option but never interrupts a running
+// regex, so a polynomial-backtracking pattern hangs the hook forever. Under
+// Bun (or when forced with ECC_HOOKIFY_REGEX_ISOLATION=process) evaluation
+// moves to a child process that spawnSync can kill. A child costs roughly
+// 100 ms, so inputs whose worst case is provably tiny stay in-process.
+const REGEX_CHILD_GRACE_MS = 250;
+const REGEX_INPROCESS_STEP_BUDGET = 2e6;
+const REGEX_CHILD_SCRIPT = [
+  "const d=JSON.parse(require('fs').readFileSync(0,'utf8'));",
+  'const r=new RegExp(d.source,d.flags);',
+  "process.stdout.write(d.values.some(v=>r.test(v))?'1':'0');",
+].join('');
+
+function useProcessIsolation() {
+  const mode = process.env.ECC_HOOKIFY_REGEX_ISOLATION;
+  if (mode === 'process') return true;
+  if (mode === 'vm') return false;
+  return Boolean(process.versions && process.versions.bun);
+}
+
+// Backtracking cost of a screened pattern grows like n^(k+1) for k unbounded
+// quantifiers, so a value of at most budget^(1/(k+1)) chars is cheap. Alternation
+// and backreferences can be exponential: those always take the child path.
+function isTriviallyCheap(regex, values) {
+  if (/\\[1-9k]/.test(regex.source)) return false;
+  // Drop escapes and the `(?` of group syntax, then count the quantifier
+  // characters left (`?` is exponential, so it counts like the others).
+  const source = regex.source.replace(/\\./g, '').replace(/\(\?/g, '(');
+  const degree = (source.match(/[*+{?]/g) || []).length;
+  if (source.includes('|') && degree > 0) return false;
+  if (degree === 0) return true;
+  const maxChars = Math.floor(Math.pow(REGEX_INPROCESS_STEP_BUDGET, 1 / (degree + 1)));
+  let total = 0;
+  for (const value of values) {
+    total += String(value).length;
+    if (total > maxChars) return false;
+  }
+  return true;
+}
+
+function testRegexInChild(regex, values) {
+  const result = spawnSync(process.execPath, ['-e', REGEX_CHILD_SCRIPT], {
+    input: JSON.stringify({ source: regex.source, flags: regex.flags, values: values.map(String) }),
+    encoding: 'utf8',
+    timeout: REGEX_TIMEOUT_MS + REGEX_CHILD_GRACE_MS,
+    maxBuffer: 1024,
+    windowsHide: true,
+  });
+  if (result.error && result.error.code === 'ETIMEDOUT') throw regexTimeoutError();
+  if (result.error || result.status !== 0) throw new Error('regex evaluation failed');
+  return result.stdout === '1';
+}
+
 function testRegex(regex, textOrValues) {
   const values = Array.isArray(textOrValues) ? textOrValues : [textOrValues];
+  if (useProcessIsolation() && !isTriviallyCheap(regex, values)) {
+    return testRegexInChild(regex, values);
+  }
   try {
     return REGEX_TEST_SCRIPT.runInNewContext(
       { regex, values },
@@ -133,9 +195,7 @@ function testRegex(regex, textOrValues) {
     );
   } catch (error) {
     if (error && error.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
-      const timeoutError = new Error('regex evaluation exceeded ' + REGEX_TIMEOUT_MS + 'ms');
-      timeoutError.code = 'HOOKIFY_REGEX_TIMEOUT';
-      throw timeoutError;
+      throw regexTimeoutError();
     }
     throw error;
   }
@@ -768,6 +828,7 @@ module.exports = {
   MAX_RULE_BYTES,
   MAX_RULES,
   REGEX_TIMEOUT_MS,
+  isTriviallyCheap,
   buildOutput,
   conditionCandidates,
   eventAlias,

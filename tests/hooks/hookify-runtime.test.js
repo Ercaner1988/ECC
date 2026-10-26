@@ -772,6 +772,48 @@ if (test('a warning cannot consume the budget and hide a later blocking rule', (
   }
 })) passed++; else failed++;
 
+function withRegexIsolation(mode, fn) {
+  const previous = process.env.ECC_HOOKIFY_REGEX_ISOLATION;
+  process.env.ECC_HOOKIFY_REGEX_ISOLATION = mode;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env.ECC_HOOKIFY_REGEX_ISOLATION;
+    else process.env.ECC_HOOKIFY_REGEX_ISOLATION = previous;
+  }
+}
+
+if (test('process-isolated regex evaluation kills a ReDoS shape within the latency bound', () => {
+  withRegexIsolation('process', () => {
+    const started = Date.now();
+    assert.throws(
+      () => runtime.testRegex(/a+a+$/i, 'a'.repeat(60000) + '!'),
+      error => error.code === 'HOOKIFY_REGEX_TIMEOUT' && /regex evaluation exceeded/.test(error.message)
+    );
+    assert.ok(Date.now() - started < 2000, 'child must be killed, not awaited');
+  });
+})) passed++; else failed++;
+
+if (test('process-isolated regex evaluation returns the same answers as the in-process path', () => {
+  withRegexIsolation('process', () => {
+    const big = 'x'.repeat(5000);
+    assert.strictEqual(runtime.testRegex(/rm\s+-rf/i, [big, 'please RM  -rf /tmp']), true);
+    assert.strictEqual(runtime.testRegex(/rm\s+-rf/i, [big]), false);
+    assert.strictEqual(runtime.testRegex(/^\d+$/, ['12345']), true);
+  });
+})) passed++; else failed++;
+
+if (test('cheap-input fast path only covers provably small worst cases', () => {
+  assert.strictEqual(runtime.isTriviallyCheap(/foo/i, ['x'.repeat(100000)]), true);
+  assert.strictEqual(runtime.isTriviallyCheap(/rm\s+-rf/i, ['rm -rf /']), true);
+  assert.strictEqual(runtime.isTriviallyCheap(/a+a+$/i, ['a'.repeat(60000)]), false);
+  assert.strictEqual(runtime.isTriviallyCheap(/a+a+$/i, ['a'.repeat(100)]), true);
+  assert.strictEqual(runtime.isTriviallyCheap(/a+a+a+a+$/i, ['a'.repeat(100)]), false);
+  assert.strictEqual(runtime.isTriviallyCheap(/a?a?a?a?a?a?a?a?a?a?aaaaaaaaaa/i, ['a'.repeat(40)]), false);
+  assert.strictEqual(runtime.isTriviallyCheap(/(a|aa)+$/i, ['a']), false);
+  assert.strictEqual(runtime.isTriviallyCheap(/(a)\1/i, ['a']), false);
+})) passed++; else failed++;
+
 console.log('\nPassed: ' + passed);
 console.log('Failed: ' + failed);
 process.exit(failed > 0 ? 1 : 0);
