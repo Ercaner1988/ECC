@@ -44,7 +44,7 @@ fail() {
 detect_pm() {
   if [[ -f "pnpm-lock.yaml" ]]; then
     echo "pnpm"
-  elif [[ -f "bun.lockb" ]]; then
+  elif [[ -f "bun.lock" || -f "bun.lockb" ]]; then
     echo "bun"
   elif [[ -f "yarn.lock" ]]; then
     echo "yarn"

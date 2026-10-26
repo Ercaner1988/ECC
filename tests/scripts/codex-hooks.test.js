@@ -256,6 +256,8 @@ function runHermeticPrePush({
   includePnpm = false,
   audit = false,
   runChecks = true,
+  lockfile = 'pnpm-lock.yaml',
+  includeBun = false,
 } = {}) {
   const tempDir = createTempDir('codex-pre-push-');
   const binDir = path.join(tempDir, 'bin');
@@ -277,9 +279,10 @@ test "$1" != "${failScript || '__never__'}"
 node() { "${toBashPath(process.execPath)}" "$@"; }
 ${includeCorepack ? functionStub('corepack', true) : ''}
 ${includePnpm ? functionStub('pnpm', false) : ''}
+${includeBun ? `bun() { printf 'bun %s\\n' "$*" >> "${toBashPath(callsPath)}"; }` : ''}
 `,
   );
-  fs.writeFileSync(path.join(projectDir, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+  fs.writeFileSync(path.join(projectDir, lockfile), 'lockfileVersion: 9\n');
   const initialized = spawnSync('git', ['init', '--quiet'], { cwd: projectDir });
   assert.strictEqual(initialized.status, 0, initialized.stderr?.toString());
   writeJson(path.join(projectDir, 'package.json'), {
@@ -321,6 +324,27 @@ if (
 )
   passed++;
 else failed++;
+
+for (const lockfile of ['bun.lock', 'bun.lockb']) {
+  if (
+    test(`pre-push detects Bun from ${lockfile} and runs every required verification script with bun`, () => {
+      const { result, calls } = runHermeticPrePush({
+        includeCorepack: false,
+        includeBun: true,
+        lockfile,
+      });
+      assert.strictEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepStrictEqual(calls, [
+        'bun run lint',
+        'bun run typecheck',
+        'bun run test',
+        'bun run build',
+      ], JSON.stringify(result, null, 2));
+    })
+  )
+    passed++;
+  else failed++;
+}
 
 if (
   test('pre-push falls back to direct pnpm when Corepack is absent', () => {
