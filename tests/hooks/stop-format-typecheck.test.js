@@ -19,6 +19,7 @@ const {
   isPluginClonePath,
   diagnosticMatchesFile,
   parseAccumulator,
+  resolveTscInvocation,
 } = require('../../scripts/hooks/stop-format-typecheck');
 
 
@@ -291,6 +292,93 @@ if (test('stop hook reports a tsc diagnostic only under the file it names', () =
     assert.ok(!rootStderr.includes('TypeScript errors'), `root index.ts must not get src/index.ts errors:\n${rootStderr}`);
     const nestedStderr = stopStderr(path.join(projectDir, 'src', 'index.ts'));
     assert.ok(nestedStderr.includes(`TypeScript errors in index.ts:\n${diagnostic}`), nestedStderr);
+  } finally {
+    cleanAccumFile();
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+})) passed++; else failed++;
+
+function withCleanPackageManagerEnv(fn) {
+  const previous = process.env.CLAUDE_PACKAGE_MANAGER;
+  delete process.env.CLAUDE_PACKAGE_MANAGER;
+  try {
+    return fn();
+  } finally {
+    if (previous !== undefined) process.env.CLAUDE_PACKAGE_MANAGER = previous;
+  }
+}
+
+if (test('resolveTscInvocation uses the package manager runner, not a hardcoded npx', () => {
+  withCleanPackageManagerEnv(() => {
+    const isWin = process.platform === 'win32';
+    const bunProject = fs.mkdtempSync(path.join(accumulatorTempRoot, 'tsc-bun-'));
+    const npmProject = fs.mkdtempSync(path.join(accumulatorTempRoot, 'tsc-npm-'));
+    try {
+      fs.writeFileSync(path.join(bunProject, 'package.json'), '{}');
+      fs.writeFileSync(path.join(bunProject, 'bun.lock'), '');
+      fs.writeFileSync(path.join(npmProject, 'package.json'), '{}');
+      fs.writeFileSync(path.join(npmProject, 'package-lock.json'), '{}');
+
+      const bun = resolveTscInvocation(bunProject);
+      assert.strictEqual(bun.bin, 'bunx');
+      assert.deepStrictEqual(bun.args, ['tsc', '--noEmit', '--pretty', 'false']);
+
+      const npm = resolveTscInvocation(npmProject);
+      assert.strictEqual(npm.bin, isWin ? 'npx.cmd' : 'npx');
+      assert.deepStrictEqual(npm.args, ['tsc', '--noEmit', '--pretty', 'false']);
+    } finally {
+      fs.rmSync(bunProject, { recursive: true, force: true });
+      fs.rmSync(npmProject, { recursive: true, force: true });
+    }
+  });
+})) passed++; else failed++;
+
+if (test('resolveTscInvocation prefers the project-local tsc over any runner', () => {
+  withCleanPackageManagerEnv(() => {
+    const project = fs.mkdtempSync(path.join(accumulatorTempRoot, 'tsc-local-'));
+    try {
+      const binDir = path.join(project, 'node_modules', '.bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.writeFileSync(path.join(project, 'package.json'), '{}');
+      fs.writeFileSync(path.join(project, 'bun.lock'), '');
+      const name = process.platform === 'win32' ? 'tsc.exe' : 'tsc';
+      fs.writeFileSync(path.join(binDir, name), '');
+      const result = resolveTscInvocation(project);
+      assert.strictEqual(result.bin, path.join(binDir, name));
+      assert.deepStrictEqual(result.args, ['--noEmit', '--pretty', 'false']);
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+})) passed++; else failed++;
+
+if (test('stop hook runs the project-local tsc without any npx on PATH', () => {
+  const { spawnSync } = require('child_process');
+  const projectDir = fs.mkdtempSync(path.join(accumulatorTempRoot, 'ts-local-'));
+  const binDir = path.join(projectDir, 'node_modules', '.bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'tsconfig.json'), '{}');
+  fs.writeFileSync(path.join(projectDir, 'package.json'), '{}');
+  fs.writeFileSync(path.join(projectDir, 'index.ts'), 'export const bad: number = "x";\n');
+  const diagnostic = "index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.";
+  const fakeTsc = path.join(projectDir, 'fake-tsc.js');
+  fs.writeFileSync(fakeTsc, `process.stdout.write(${JSON.stringify(`${diagnostic}\n`)});\nprocess.exitCode = 2;\n`);
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(binDir, 'tsc.cmd'), `@echo off\r\n"${process.execPath}" "${fakeTsc}" %*\r\n`);
+  } else {
+    fs.writeFileSync(path.join(binDir, 'tsc'), `#!/bin/sh\nexec "${process.execPath}" "${fakeTsc}" "$@"\n`);
+    fs.chmodSync(path.join(binDir, 'tsc'), 0o755);
+  }
+  const stopScript = path.resolve(__dirname, '../../scripts/hooks/stop-format-typecheck.js');
+  try {
+    fs.writeFileSync(getAccumFile(), `${path.join(projectDir, 'index.ts')}\n`);
+    const result = spawnSync('node', [stopScript], {
+      input: '{}',
+      env: { ...process.env, CLAUDE_SESSION_ID: TEST_SESSION_ID },
+      encoding: 'utf8',
+      timeout: 10000
+    });
+    assert.ok(result.stderr.includes(`TypeScript errors in index.ts:\n${diagnostic}`), result.stderr);
   } finally {
     cleanAccumFile();
     fs.rmSync(projectDir, { recursive: true, force: true });

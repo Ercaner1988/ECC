@@ -9,7 +9,9 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const { findProjectRoot, detectFormatter, resolveFormatterBin, clearCaches } = require('../../scripts/lib/resolve-formatter');
+const {
+  findProjectRoot, detectFormatter, resolveFormatterBin, clearCaches, defaultExecCmd, findLocalBin,
+} = require('../../scripts/lib/resolve-formatter');
 
 /**
  * Run a single test case, printing pass/fail.
@@ -238,6 +240,41 @@ function runTests() {
       assert.strictEqual(result.bin, expectedBin);
       assert.deepStrictEqual(result.prefix, ['prettier']);
     });
+  });
+
+  run('resolveFormatterBin: bun project falls back to a real bunx executable (never bunx.cmd)', () => {
+    const root = makeTmpDir();
+    fs.writeFileSync(path.join(root, 'bun.lock'), '');
+    fs.writeFileSync(path.join(root, 'package.json'), '{}');
+    const previous = process.env.CLAUDE_PACKAGE_MANAGER;
+    delete process.env.CLAUDE_PACKAGE_MANAGER;
+    try {
+      withIsolatedHome(() => {
+        const result = resolveFormatterBin(root, 'prettier');
+        assert.strictEqual(result.bin, 'bunx');
+        assert.deepStrictEqual(result.prefix, ['prettier']);
+      });
+    } finally {
+      if (previous !== undefined) process.env.CLAUDE_PACKAGE_MANAGER = previous;
+    }
+  });
+
+  run('defaultExecCmd: bunx under Bun, npx otherwise', () => {
+    assert.strictEqual(defaultExecCmd(), process.versions.bun ? 'bunx' : 'npx');
+  });
+
+  run('findLocalBin: finds the platform shim, including Bun .exe shims on Windows', () => {
+    const root = makeTmpDir();
+    const binDir = path.join(root, 'node_modules', '.bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    assert.strictEqual(findLocalBin(root, 'tsc'), null);
+    const name = process.platform === 'win32' ? 'tsc.exe' : 'tsc';
+    fs.writeFileSync(path.join(binDir, name), '');
+    assert.strictEqual(findLocalBin(root, 'tsc'), path.join(binDir, name));
+    if (process.platform === 'win32') {
+      fs.writeFileSync(path.join(binDir, 'tsc.cmd'), '');
+      assert.strictEqual(findLocalBin(root, 'tsc'), path.join(binDir, 'tsc.cmd'));
+    }
   });
 
   run('resolveFormatterBin: returns null for unknown formatter', () => {

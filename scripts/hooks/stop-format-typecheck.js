@@ -22,7 +22,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { findProjectRoot, detectFormatter, resolveFormatterBin } = require('../lib/resolve-formatter');
+const {
+  findProjectRoot, detectFormatter, resolveFormatterBin, findLocalBin, getRunnerFromPackageManager,
+} = require('../lib/resolve-formatter');
 const { resolveHookSessionId } = require('../lib/hook-session');
 
 const MAX_STDIN = 1024 * 1024;
@@ -142,10 +144,30 @@ function diagnosticMatchesFile(line, paths) {
   return false;
 }
 
+/**
+ * Resolve how to run tsc for a tsconfig directory: the project's own
+ * node_modules/.bin/tsc when present, otherwise the configured package
+ * manager's exec runner (npx, bunx, pnpm dlx, yarn dlx) instead of a
+ * hardcoded npx.
+ *
+ * @param {string} tsConfigDir
+ * @returns {{ bin: string, args: string[] }}
+ */
+function resolveTscInvocation(tsConfigDir) {
+  const tscArgs = ['--noEmit', '--pretty', 'false'];
+  const localBin = findLocalBin(tsConfigDir, 'tsc')
+    || findLocalBin(findProjectRoot(tsConfigDir), 'tsc');
+  if (localBin) return { bin: localBin, args: tscArgs };
+  const runner = getRunnerFromPackageManager(tsConfigDir);
+  return { bin: runner.bin, args: [...runner.prefix, 'tsc', ...tscArgs] };
+}
+
 function typecheckBatch(tsConfigDir, editedFiles, timeoutMs) {
   const isWin = process.platform === 'win32';
-  const npxBin = isWin ? 'npx.cmd' : 'npx';
-  const args = ['tsc', '--noEmit', '--pretty', 'false'];
+  const { bin: tscBin, args } = resolveTscInvocation(tsConfigDir);
+  // Only .cmd/.bat shims need a shell on Windows; real executables (bunx.exe,
+  // Bun's tsc.exe) are spawned directly.
+  const needsShell = isWin && /\.(cmd|bat)$/i.test(tscBin);
   const opts = { cwd: tsConfigDir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: timeoutMs };
 
   let stdout = '';
@@ -153,9 +175,10 @@ function typecheckBatch(tsConfigDir, editedFiles, timeoutMs) {
   let failed = false;
 
   try {
-    if (isWin) {
-      // .cmd files require shell: true on Windows
-      const result = spawnSync(npxBin, args, { ...opts, shell: true });
+    if (needsShell) {
+      // .cmd files require shell: true on Windows; quote a path with spaces
+      const command = /\s/.test(tscBin) ? `"${tscBin}"` : tscBin;
+      const result = spawnSync(command, args, { ...opts, shell: true });
       if (result.error) return; // timed out or not found — non-blocking
       if (result.status !== 0) {
         stdout = result.stdout || '';
@@ -163,7 +186,7 @@ function typecheckBatch(tsConfigDir, editedFiles, timeoutMs) {
         failed = true;
       }
     } else {
-      execFileSync(npxBin, args, opts);
+      execFileSync(tscBin, args, opts);
     }
   } catch (err) {
     stdout = err.stdout || '';
@@ -282,6 +305,7 @@ if (require.main === module) {
 
 module.exports = {
   diagnosticMatchesFile,
+  resolveTscInvocation,
   run,
   parseAccumulator,
   isPluginClonePath,

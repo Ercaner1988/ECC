@@ -47,7 +47,9 @@ const PRETTIER_CONFIGS = [
 const PROJECT_ROOT_MARKERS = ['package.json', ...BIOME_CONFIGS, ...PRETTIER_CONFIGS];
 
 // ── Windows .cmd shim mapping ───────────────────────────────────────
-const WIN_CMD_SHIMS = { npx: 'npx.cmd', pnpm: 'pnpm.cmd', yarn: 'yarn.cmd', bunx: 'bunx.cmd' };
+// bunx is deliberately absent: Bun installs bunx.exe only (no bunx.cmd), and a
+// real executable needs no shell shim.
+const WIN_CMD_SHIMS = { npx: 'npx.cmd', pnpm: 'pnpm.cmd', yarn: 'yarn.cmd' };
 
 // ── Formatter → package name mapping ────────────────────────────────
 const FORMATTER_PACKAGES = {
@@ -130,6 +132,32 @@ function detectFormatter(projectRoot) {
 }
 
 /**
+ * Runner used when no package manager could be resolved: Bun's own runner when
+ * this process is Bun (so Bun is certainly installed), otherwise npx.
+ */
+function defaultExecCmd() {
+  return process.versions && process.versions.bun ? 'bunx' : 'npx';
+}
+
+/**
+ * Locate a locally installed binary in <dir>/node_modules/.bin. On Windows
+ * npm/pnpm/yarn create <name>.cmd shims while Bun creates <name>.exe.
+ *
+ * @param {string} dir - Directory containing node_modules
+ * @param {string} binName - Binary name (e.g. 'tsc', 'prettier')
+ * @returns {string | null} Absolute path of the binary, or null
+ */
+function findLocalBin(dir, binName) {
+  const binDir = path.join(dir, 'node_modules', '.bin');
+  const names = process.platform === 'win32' ? [`${binName}.cmd`, `${binName}.exe`] : [binName];
+  for (const name of names) {
+    const candidate = path.join(binDir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
  * Resolve the runner binary and prefix args for the configured package
  * manager (respects CLAUDE_PACKAGE_MANAGER env and project config).
  *
@@ -140,8 +168,8 @@ function getRunnerFromPackageManager(projectRoot) {
   const isWin = process.platform === 'win32';
   const { getPackageManager } = require('./package-manager');
   const pm = getPackageManager({ projectDir: projectRoot });
-  const execCmd = pm?.config?.execCmd || 'npx';
-  const [rawBin = 'npx', ...prefix] = execCmd.split(/\s+/).filter(Boolean);
+  const execCmd = pm?.config?.execCmd || defaultExecCmd();
+  const [rawBin = defaultExecCmd(), ...prefix] = execCmd.split(/\s+/).filter(Boolean);
   const bin = isWin ? WIN_CMD_SHIMS[rawBin] || rawBin : rawBin;
   return { bin, prefix };
 }
@@ -167,10 +195,9 @@ function resolveFormatterBin(projectRoot, formatter) {
     return null;
   }
 
-  const isWin = process.platform === 'win32';
-  const localBin = path.join(projectRoot, 'node_modules', '.bin', isWin ? `${pkg.binName}.cmd` : pkg.binName);
+  const localBin = findLocalBin(projectRoot, pkg.binName);
 
-  if (fs.existsSync(localBin)) {
+  if (localBin) {
     const result = { bin: localBin, prefix: [] };
     binCache.set(cacheKey, result);
     return result;
@@ -195,5 +222,8 @@ module.exports = {
   findProjectRoot,
   detectFormatter,
   resolveFormatterBin,
+  getRunnerFromPackageManager,
+  defaultExecCmd,
+  findLocalBin,
   clearCaches
 };
