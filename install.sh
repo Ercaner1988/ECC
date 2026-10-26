@@ -27,7 +27,12 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 # compromised dependency. ECC deps are pure JS (no native build step).
 if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
     echo "[ECC] Installing dependencies..."
-    (cd "$SCRIPT_DIR" && npm install --ignore-scripts --no-audit --no-fund --loglevel=error)
+    # Prefer Bun when present (same --ignore-scripts guarantee); otherwise npm.
+    if command -v bun >/dev/null 2>&1; then
+        (cd "$SCRIPT_DIR" && bun install --ignore-scripts --no-progress --silent)
+    else
+        (cd "$SCRIPT_DIR" && npm install --ignore-scripts --no-audit --no-fund --loglevel=error)
+    fi
 fi
 
 # On MSYS2/Git Bash, convert the POSIX path to a Windows path so Node.js
