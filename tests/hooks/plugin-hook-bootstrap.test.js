@@ -12,7 +12,7 @@ const { spawnSync } = require('child_process');
 
 const SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'hooks', 'plugin-hook-bootstrap.js');
 const LIFECYCLE_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'hooks', 'lifecycle-hook-bootstrap.js');
-const { normalizePluginRootForPlatform, withComparisonInput } = require(SCRIPT);
+const { normalizePluginRootForPlatform, shouldRunAsEntry, withComparisonInput } = require(SCRIPT);
 const { resolveTimeout } = require(LIFECYCLE_SCRIPT);
 const { resolveWindowsBashCandidates } = require('../../scripts/lib/windows-bash');
 
@@ -311,6 +311,40 @@ process.exit(7);
     }
   })) passed++; else failed++;
 
+  if (test('shouldRunAsEntry accepts direct entry, Node -e (undefined main) and Bun [eval] main', () => {
+    const self = { filename: '/x/plugin-hook-bootstrap.js' };
+    assert.strictEqual(shouldRunAsEntry(self, self), true);
+    assert.strictEqual(shouldRunAsEntry(undefined, self), true);
+    assert.strictEqual(shouldRunAsEntry({ id: '.', filename: '/work/[eval]' }, self), true);
+    assert.strictEqual(shouldRunAsEntry({ id: '.', filename: 'C:\\work\\[eval]' }, self), true);
+    // Imported for its exports by a real, different entry module: stay dormant.
+    assert.strictEqual(shouldRunAsEntry({ id: '.', filename: '/tests/runner.js' }, self), false);
+    assert.strictEqual(shouldRunAsEntry({ id: '.', filename: '/tests/[eval]-notes.js' }, self), false);
+  })) passed++; else failed++;
+
+  if (test('runs main() when loaded through the hooks.json node -e require(s) bootstrap', () => {
+    const root = createTempDir();
+    try {
+      writeFile(root, 'scripts/hooks/probe.js', "process.stdout.write('probe-ran');\n");
+      const result = spawnSync(process.execPath, [
+        '-e',
+        `const s=${JSON.stringify(SCRIPT)};process.argv.splice(1,0,s);require(s)`,
+        'node',
+        'scripts/hooks/probe.js',
+      ], {
+        input: '{}',
+        encoding: 'utf8',
+        env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, ECC_PLUGIN_ROOT: '' },
+        cwd: root,
+        timeout: 10000,
+      });
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.ok(result.stdout.includes('probe-ran'), 'main() did not run: stdout=' + JSON.stringify(result.stdout) + ' stderr=' + result.stderr);
+    } finally {
+      cleanup(root);
+    }
+  })) passed++; else failed++;
+
   if (test('missing node target returns child failure diagnostics', () => {
     const root = createTempDir();
     try {
@@ -321,7 +355,8 @@ process.exit(7);
 
       assert.strictEqual(result.status, 1);
       assert.strictEqual(result.stdout, '');
-      assert.ok(result.stderr.includes('Cannot find module'));
+      // Node says "Cannot find module"; Bun says "Module not found".
+      assert.ok(/Cannot find module|Module not found/.test(result.stderr), result.stderr);
     } finally {
       cleanup(root);
     }

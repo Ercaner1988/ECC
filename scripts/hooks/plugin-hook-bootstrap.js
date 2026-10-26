@@ -315,14 +315,31 @@ async function main() {
   process.exitCode = Number.isInteger(result.status) ? result.status : 0;
 }
 
+/**
+ * True when `mainModule` is the synthetic module of a `-e` / `--eval` run.
+ * Node leaves require.main undefined there (handled by the caller); Bun
+ * defines it as a module whose filename ends in `[eval]`.
+ */
+function isEvalMainModule(mainModule) {
+  if (!mainModule) return false;
+  const name = typeof mainModule.filename === 'string' ? mainModule.filename : '';
+  return /(^|[\\/])\[eval\]$/.test(name);
+}
+
+function shouldRunAsEntry(mainModule, currentModule) {
+  return mainModule === currentModule
+    || mainModule === undefined
+    || isEvalMainModule(mainModule);
+}
+
 // Run when invoked as a hook entry. Production hooks load this via
-// `node -e "...; process.argv.splice(1,0,s); require(s)"`; on Node 21+ that
-// leaves require.main undefined (not this module), which previously skipped
-// main() and made every plugin hook a silent no-op. Guard on both the
-// direct-entry case and that eval-bootstrap case. When imported for its
-// exports (tests), require.main is a real, different module, so main() stays
-// dormant.
-if (require.main === module || require.main === undefined) {
+// `node -e "...; process.argv.splice(1,0,s); require(s)"`. Under Node 21+ that
+// leaves require.main undefined (not this module), and under Bun it is the
+// `[eval]` module; either way a plain `require.main === module` check skipped
+// main() and made every plugin hook a silent no-op. Guard on the direct-entry
+// case and both eval-bootstrap cases. When imported for its exports (tests),
+// require.main is a real, different module, so main() stays dormant.
+if (shouldRunAsEntry(require.main, module)) {
   main().catch(error => {
     writeStderr(`[Hook] bootstrap failed: ${error.message}\n`);
     process.exitCode = 0;
@@ -330,8 +347,10 @@ if (require.main === module || require.main === undefined) {
 }
 
 module.exports = {
+  isEvalMainModule,
   isRawPassthrough,
   main,
+  shouldRunAsEntry,
   normalizePluginRootForPlatform,
   withComparisonInput,
 };
