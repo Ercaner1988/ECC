@@ -605,6 +605,40 @@ function runTests() {
     }
   })) passed++; else failed++;
 
+  if (test('loads without js-yaml installed and skips only pubspec parsing (plugin cache has no node_modules)', () => {
+    const { spawnSync } = require('child_process');
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-no-yaml-'));
+    const project = createTempDir();
+    try {
+      fs.writeFileSync(
+        path.join(sandbox, 'project-detect.js'),
+        fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'lib', 'project-detect.js'), 'utf8')
+      );
+      writeTestFile(project, 'pubspec.yaml', 'name: t\ndependencies:\n  flutter:\n    sdk: flutter\n');
+      writeTestFile(project, 'lib/main.dart', 'void main() {}\n');
+      // A stub package that fails to load, as when the plugin cache ships no
+      // node_modules; it also shadows any js-yaml on an ancestor path.
+      const stub = path.join(sandbox, 'node_modules', 'js-yaml');
+      fs.mkdirSync(stub, { recursive: true });
+      fs.writeFileSync(path.join(stub, 'package.json'), '{"name":"js-yaml","main":"index.js"}');
+      fs.writeFileSync(path.join(stub, 'index.js'), "const e = new Error(\"Cannot find module 'js-yaml'\"); e.code = 'MODULE_NOT_FOUND'; throw e;\n");
+      const probe = [
+        `const pd = require(${JSON.stringify(path.join(sandbox, 'project-detect.js'))});`,
+        `const r = pd.detectProjectType(${JSON.stringify(project)});`,
+        'console.log(JSON.stringify(r));',
+      ].join('\n');
+      const result = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8', timeout: 20000 });
+      assert.strictEqual(result.status, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout.trim());
+      assert.ok(parsed.languages.includes('dart'), 'dart still detected from markers');
+      assert.ok(!parsed.frameworks.includes('flutter'), 'pubspec parsing is skipped without js-yaml');
+      assert.match(result.stderr, /js-yaml is not installed/);
+    } finally {
+      cleanupDir(sandbox);
+      cleanupDir(project);
+    }
+  })) passed++; else failed++;
+
   // Summary
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
   process.exit(failed > 0 ? 1 : 0);

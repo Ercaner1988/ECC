@@ -9,7 +9,26 @@
 
 const fs = require('fs');
 const path = require('path');
-const yaml = require('js-yaml');
+
+// js-yaml is loaded lazily: a plugin cache install ships no node_modules, and a
+// top-level require made every SessionStart hook that imports this module exit 1.
+// Without it only pubspec.yaml parsing is skipped (one stderr warning).
+let yamlModule;
+let yamlMissingWarned = false;
+
+function loadYaml() {
+  if (yamlModule !== undefined) return yamlModule;
+  try {
+    yamlModule = require('js-yaml');
+  } catch (error) {
+    yamlModule = null;
+    if (!yamlMissingWarned) {
+      yamlMissingWarned = true;
+      process.stderr.write('[project-detect] js-yaml is not installed; skipping pubspec.yaml parsing (Flutter detection disabled)\n');
+    }
+  }
+  return yamlModule;
+}
 
 /**
  * Language detection rules.
@@ -349,6 +368,8 @@ function hasFlutterSdkDependency(projectDir) {
   try {
     const pubspecPath = path.join(projectDir, 'pubspec.yaml');
     if (!fs.existsSync(pubspecPath)) return false;
+    const yaml = loadYaml();
+    if (!yaml) return false;
     const content = fs.readFileSync(pubspecPath, 'utf8');
     const pubspec = yaml.load(content, { schema: yaml.JSON_SCHEMA });
     // Only a declared Flutter SDK dependency identifies the framework.
