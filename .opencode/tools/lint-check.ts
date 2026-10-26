@@ -111,8 +111,8 @@ function buildLintCommand(linter: Linter, target: string, fix: boolean): string 
   
   // Build command based on linter and platform
   const commands: Record<Linter, string> = {
-    biome: `npx @biomejs/biome lint${fix ? " --write" : ""} ${normalizedTarget}`,
-    eslint: `npx eslint${fix ? " --fix" : ""} ${normalizedTarget}`,
+    biome: `bunx @biomejs/biome lint${fix ? " --write" : ""} ${normalizedTarget}`,
+    eslint: `bunx eslint${fix ? " --fix" : ""} ${normalizedTarget}`,
     ruff: `ruff check${fix ? " --fix" : ""} ${normalizedTarget}`,
     pylint: `pylint ${normalizedTarget}`,
     "golangci-lint": `golangci-lint run ${normalizedTarget}`,

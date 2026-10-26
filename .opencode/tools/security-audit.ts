@@ -51,7 +51,7 @@ const securityAuditTool: ToolDefinition = tool({
       results.checks.push({
         name: "Dependency Vulnerabilities",
         description: "Check for known vulnerabilities in dependencies",
-        command: fix ? "npm audit fix" : "npm audit",
+        command: fix ? "bun update" : "bun audit",
         severityFilter: severity,
         status: "pending",
       })

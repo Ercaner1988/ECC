@@ -381,7 +381,7 @@ export const ECCHooksPlugin: ECCHooksPluginFn = async ({
         input.args?.filePath?.match(/\.tsx?$/)
       ) {
         try {
-          await $`npx tsc --noEmit 2>&1`
+          await $`bunx tsc --noEmit 2>&1`
           log("info", "[ECC] TypeScript check passed")
         } catch (error: unknown) {
           const err = error as { stdout?: string }

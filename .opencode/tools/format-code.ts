@@ -111,8 +111,8 @@ function buildFormatterCommand(formatter: Formatter, filePath: string, cwd?: str
 
   // Build command based on formatter and platform
   const commands: Record<Formatter, string> = {
-    biome: `npx @biomejs/biome format --write ${normalizedPath}`,
-    prettier: `npx prettier --write ${normalizedPath}`,
+    biome: `bunx @biomejs/biome format --write ${normalizedPath}`,
+    prettier: `bunx prettier --write ${normalizedPath}`,
     black: `black ${normalizedPath}`,
     gofmt: `gofmt -w ${normalizedPath}`,
     rustfmt: `rustfmt ${normalizedPath}`,
