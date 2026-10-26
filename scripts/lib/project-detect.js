@@ -20,7 +20,7 @@ function loadYaml() {
   if (yamlModule !== undefined) return yamlModule;
   try {
     yamlModule = require('js-yaml');
-  } catch (error) {
+  } catch {
     yamlModule = null;
     if (!yamlMissingWarned) {
       yamlMissingWarned = true;
